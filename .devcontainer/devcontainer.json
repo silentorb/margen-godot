@@ -1,0 +1,13 @@
+{
+    "name": "margen-godot",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "files.eol": "\n"
+            }
+        }
+    }
+}

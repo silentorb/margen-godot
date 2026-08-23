@@ -1,0 +1,12 @@
+/build/
+/cmake-build-*/
+/.cache/
+/godot-cpp/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+compile_commands.json
+.vscode/
+.idea/
