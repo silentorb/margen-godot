@@ -1,10 +1,10 @@
 # margen-godot
 
-Godot **GDExtension** that integrates the [margen](../margen) world-generation library into Godot 4.x.
+Godot **GDExtension** that integrates the [margen](../margen) world-generation library into Godot 4.x via margen’s **C ABI**.
 
-Generation algorithms stay in **margen**. This repository only:
+Generation algorithms stay in **margen** (Rust). This repository only:
 
-- Loads/links margen
+- Loads/links `margen-ffi` (`include/margen.h`)
 - Converts margen datasets into Godot meshes, nodes, and materials
 - Exposes a thin API to GDScript / C# games (e.g. Marloth)
 

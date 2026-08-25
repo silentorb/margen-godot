@@ -10,9 +10,10 @@ project(margen_godot
 # mesh/scene conversion from margen datasets is implemented.
 #
 # Expected later shape:
-#   find_package(margen REQUIRED)
+#   # Build/install margen-ffi (Rust) and point at include/margen.h + libmargen_ffi
 #   add_subdirectory(godot-cpp)  # or FetchContent
 #   add_library(margen_godot SHARED ...)
-#   target_link_libraries(margen_godot PRIVATE margen::margen godot-cpp)
+#   target_include_directories(margen_godot PRIVATE ${MARGEN_INCLUDE_DIR})
+#   target_link_libraries(margen_godot PRIVATE margen_ffi godot-cpp)
 
 message(STATUS "margen-godot: scaffold only — no GDExtension targets yet")
