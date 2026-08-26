@@ -9,7 +9,7 @@
 
 ## Current status
 
-Scaffold only. `godot-cpp` and a `.gdextension` resource land when the first mesh/scene conversion is needed.
+`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot. Linux debug/release builds are supported first.
 
 ## Relation to other repos
 
@@ -17,18 +17,19 @@ Scaffold only. `godot-cpp` and a `.gdextension` resource land when the first mes
 |------|------|
 | **margen** | Engine-agnostic world generation (Rust) + mythic utilities + **C ABI** (`include/margen.h`) |
 | **margen-godot** | This repo — Godot integration via the C ABI |
-| **marloth** | Godot game that will consume the extension (game glue likely C#) |
+| **marloth** | Godot game that loads the extension and hosts debug/integration scenes |
 
-## Build (future)
+## Build
 
-Expected shape once wired:
+**Dev container (recommended):** Reopen this repo in [`.devcontainer/`](.devcontainer/) — Rust, Python 3, CMake, Ninja, and `build-essential` live here so marloth/margen images stay lean. The container mounts sibling **`margen`** at `/workspaces/margen`.
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+git submodule update --init --recursive   # also runs as postCreateCommand
+./scripts/build.sh
+./scripts/install-to-marloth.sh   # optional: copy .so into marloth addons/
 ```
 
-Link against **margen-ffi** (`libmargen_ffi` / `margen_ffi`) and include margen’s [`include/margen.h`](../margen/include/margen.h)—not a C++ `margen::margen` CMake package.
+Link against **margen-ffi** (`libmargen_ffi`) and include margen’s [`include/margen.h`](../margen/include/margen.h).
 
 ## Conventions
 

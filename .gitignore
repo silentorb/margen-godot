@@ -1,12 +1,11 @@
 /build/
 /cmake-build-*/
 /.cache/
-/godot-cpp/
 *.o
 *.a
-*.so
-*.dylib
-*.dll
+/bin/*.so
+/bin/*.dylib
+/bin/*.dll
 compile_commands.json
 .vscode/
 .idea/

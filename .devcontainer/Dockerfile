@@ -1,7 +1,13 @@
 FROM mcr.microsoft.com/devcontainers/cpp:1-debian-12
 
-# Shares the C++ toolchain style with margen. godot-cpp will be added when the
-# extension is implemented; until then this image is enough to configure CMake.
+# GDExtension toolchain: CMake/godot-cpp (Python binding generation) plus headers/libs
+# consumed from margen_ffi (Rust — installed via devcontainer Rust feature).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends cmake make g++ git \
-    && rm -rf /var/lib/apt/lists/*
+	&& apt-get install -y --no-install-recommends \
+		build-essential \
+		cmake \
+		ninja-build \
+		python3 \
+		git \
+		ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*

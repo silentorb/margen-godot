@@ -1,13 +1,25 @@
 {
-    "name": "margen-godot",
-    "build": {
-        "dockerfile": "Dockerfile"
-    },
-    "customizations": {
-        "vscode": {
-            "settings": {
-                "files.eol": "\n"
-            }
-        }
-    }
+	"name": "margen-godot",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/rust:1": {
+			"version": "1.88"
+		}
+	},
+	"mounts": [
+		"source=${localWorkspaceFolder}/../margen,target=/workspaces/margen,type=bind,consistency=cached"
+	],
+	"containerEnv": {
+		"MARGEN_ROOT": "/workspaces/margen"
+	},
+	"postCreateCommand": "git submodule update --init --recursive",
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"files.eol": "\n"
+			}
+		}
+	}
 }
