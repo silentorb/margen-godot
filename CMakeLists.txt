@@ -8,18 +8,25 @@ endif()
 
 set(MARGEN_ROOT "${CMAKE_SOURCE_DIR}/../margen" CACHE PATH "Path to margen repo root")
 set(MARGEN_FFI_PROFILE "release" CACHE STRING "margen_ffi cargo profile (debug/release)")
+set(MARGEN_FFI_TARGET "" CACHE STRING "Optional cargo target triple (e.g. x86_64-pc-windows-gnu)")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 	set(MARGEN_FFI_PROFILE "debug")
 endif()
 
-set(MARGEN_FFI_DIR "${MARGEN_ROOT}/target/${MARGEN_FFI_PROFILE}")
+if(MARGEN_FFI_TARGET STREQUAL "")
+	set(MARGEN_FFI_DIR "${MARGEN_ROOT}/target/${MARGEN_FFI_PROFILE}")
+else()
+	set(MARGEN_FFI_DIR "${MARGEN_ROOT}/target/${MARGEN_FFI_TARGET}/${MARGEN_FFI_PROFILE}")
+endif()
+
 find_library(
 	MARGEN_FFI_LIB
 	NAMES margen_ffi
 	PATHS "${MARGEN_FFI_DIR}"
 	REQUIRED
 	NO_DEFAULT_PATH
+	NO_CMAKE_FIND_ROOT_PATH
 )
 message(STATUS "Using margen_ffi from ${MARGEN_FFI_LIB}")
 
@@ -41,10 +48,15 @@ target_include_directories(${TARGET_NAME} PRIVATE
 target_link_libraries(${TARGET_NAME} PRIVATE
 	godot-cpp
 	${MARGEN_FFI_LIB}
-	dl
-	m
-	pthread
 )
+
+if(NOT WIN32)
+	target_link_libraries(${TARGET_NAME} PRIVATE
+		dl
+		m
+		pthread
+	)
+endif()
 
 get_target_property(GODOTCPP_SUFFIX godot-cpp GODOTCPP_SUFFIX)
 
@@ -66,12 +78,23 @@ set_target_properties(
 		OUTPUT_NAME "margen_godot${GODOTCPP_SUFFIX}"
 )
 
-# Ship margen_ffi next to the extension so $ORIGIN RPATH resolves at load time.
+# Ship margen_ffi next to the extension so $ORIGIN / same-dir load resolves at runtime.
+if(WIN32)
+	set(_MARGEN_FFI_RUNTIME "${MARGEN_FFI_DIR}/margen_ffi.dll")
+	if(NOT EXISTS "${_MARGEN_FFI_RUNTIME}")
+		message(FATAL_ERROR "Expected Windows DLL at ${_MARGEN_FFI_RUNTIME}")
+	endif()
+	set(_MARGEN_FFI_DEST "${OUTPUT_DIR}/margen_ffi.dll")
+else()
+	set(_MARGEN_FFI_RUNTIME "${MARGEN_FFI_LIB}")
+	set(_MARGEN_FFI_DEST "${OUTPUT_DIR}/libmargen_ffi.so")
+endif()
+
 add_custom_command(
 	TARGET ${TARGET_NAME}
 	POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different
-		"${MARGEN_FFI_LIB}"
-		"${OUTPUT_DIR}/libmargen_ffi.so"
-	COMMENT "Copying libmargen_ffi.so into bin/"
+		"${_MARGEN_FFI_RUNTIME}"
+		"${_MARGEN_FFI_DEST}"
+	COMMENT "Copying margen_ffi into bin/"
 )

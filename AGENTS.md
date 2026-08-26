@@ -9,7 +9,7 @@
 
 ## Current status
 
-`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot. Linux debug/release builds are supported first.
+`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot. Linux and Windows (MinGW cross from Linux) debug/release builds are supported.
 
 ## Relation to other repos
 
@@ -21,15 +21,16 @@
 
 ## Build
 
-**Dev container (recommended):** Reopen this repo in [`.devcontainer/`](.devcontainer/) — Rust, Python 3, CMake, Ninja, and `build-essential` live here so marloth/margen images stay lean. The container mounts sibling **`margen`** at `/workspaces/margen`.
+**Dev container (recommended):** Reopen this repo in [`.devcontainer/`](.devcontainer/) — Rust, Python 3, CMake, Ninja, and `build-essential` live here so marloth/margen images stay lean. The container mounts sibling **`margen`** at `/workspaces/margen`. For Windows natives, prefer Marloth’s **`marloth-win`** compose service (MinGW + Rust `windows-gnu`).
 
 ```bash
 git submodule update --init --recursive   # also runs as postCreateCommand
-./scripts/build.sh
-./scripts/install-to-marloth.sh   # optional: copy .so into marloth addons/
+./scripts/build.sh                        # Linux .so
+TARGET=windows ./scripts/build.sh         # Windows .dll (needs MinGW toolchain)
+./scripts/install-to-marloth.sh           # optional: copy natives into marloth addons/
 ```
 
-Link against **margen-ffi** (`libmargen_ffi`) and include margen’s [`include/margen.h`](../margen/include/margen.h).
+Link against **margen-ffi** (`libmargen_ffi` / `margen_ffi.dll`) and include margen’s [`include/margen.h`](../margen/include/margen.h).
 
 ## Conventions
 
