@@ -148,9 +148,30 @@ void MargenWorldMesh::generate() {
 		return;
 	}
 
-	const size_t face_count = margen_world_faces_count(handle);
+	const MargenVec3 *bulk_points = nullptr;
+	const MargenVec2 *bulk_uvs = nullptr;
+	const MargenBulkFaceDesc *bulk_faces = nullptr;
+	size_t bulk_point_count = 0;
+	size_t bulk_uv_count = 0;
+	size_t bulk_face_count = 0;
+	if (margen_world_faces_bulk(
+				handle,
+				&bulk_points,
+				&bulk_point_count,
+				&bulk_uvs,
+				&bulk_uv_count,
+				&bulk_faces,
+				&bulk_face_count) != MARGEN_OK
+			|| bulk_faces == nullptr) {
+		UtilityFunctions::push_error(
+				"MargenWorldMesh: margen_world_faces_bulk failed: ",
+				margen_last_error() != nullptr ? String(margen_last_error()) : String("unknown"));
+		margen_world_faces_free(handle);
+		return;
+	}
+
 	const size_t material_count = margen_world_faces_material_count(handle);
-	if (face_count == 0) {
+	if (bulk_face_count == 0) {
 		UtilityFunctions::push_warning("MargenWorldMesh: generation returned zero faces");
 		margen_world_faces_free(handle);
 		return;
@@ -174,15 +195,15 @@ void MargenWorldMesh::generate() {
 
 		int vertex_offset = 0;
 
-		for (size_t face_index = 0; face_index < face_count; ++face_index) {
-			MargenRenderFaceInfo face{};
-			if (margen_world_faces_get_face(handle, face_index, &face) != MARGEN_OK) {
-				continue;
-			}
+		for (size_t face_index = 0; face_index < bulk_face_count; ++face_index) {
+			const MargenBulkFaceDesc &face = bulk_faces[face_index];
 			if (face.material_id != slot.slot_index) {
 				continue;
 			}
 			if (face.point_count < 3) {
+				continue;
+			}
+			if (static_cast<size_t>(face.point_begin) + face.point_count > bulk_point_count) {
 				continue;
 			}
 
@@ -202,10 +223,7 @@ void MargenWorldMesh::generate() {
 			face_vertices.reserve(face.point_count);
 
 			for (uint32_t point_index = 0; point_index < face.point_count; ++point_index) {
-				MargenVec3 point{};
-				if (margen_world_faces_get_point(handle, face_index, point_index, &point) != MARGEN_OK) {
-					continue;
-				}
+				const MargenVec3 &point = bulk_points[face.point_begin + point_index];
 				face_vertices.push_back(margen_point_to_godot(center, point, half_size));
 			}
 
@@ -221,9 +239,9 @@ void MargenWorldMesh::generate() {
 				vertices.push_back(face_vertices[point_index]);
 				normals.push_back(normal);
 
-				MargenVec2 uv{};
-				if (point_index < face.uv_count &&
-						margen_world_faces_get_uv(handle, face_index, point_index, &uv) == MARGEN_OK) {
+				if (point_index < face.uv_count
+						&& static_cast<size_t>(face.uv_begin) + point_index < bulk_uv_count) {
+					const MargenVec2 &uv = bulk_uvs[face.uv_begin + point_index];
 					uvs.push_back(Vector2(uv.x, uv.y));
 				} else {
 					uvs.push_back(Vector2(0.0f, 0.0f));

@@ -9,7 +9,9 @@
 
 ## Current status
 
-`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot. Linux and Windows (MinGW cross from Linux) debug/release builds are supported.
+`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot, using **`margen_world_faces_bulk`** (contiguous points/uvs) rather than per-point FFI getters. Linux and Windows (clang-cl / cargo-xwin MSVC cross from Linux) debug/release builds are supported.
+
+Diagnostics: stderr/Godot warnings on library init (`margen_godot: library_init …`, `initialized … api=…`); API audit via `./scripts/verify-godot-cpp-api.sh`.
 
 ## Relation to other repos
 
@@ -21,12 +23,12 @@
 
 ## Build
 
-**Dev container (recommended):** Reopen this repo in [`.devcontainer/`](.devcontainer/) — Rust, Python 3, CMake, Ninja, and `build-essential` live here so marloth/margen images stay lean. The container mounts sibling **`margen`** at `/workspaces/margen`. For Windows natives, prefer Marloth’s **`marloth-win`** compose service (MinGW + Rust `windows-gnu`).
+**Dev container (recommended):** Reopen this repo in [`.devcontainer/`](.devcontainer/) — Rust, Python 3, CMake, Ninja, and `build-essential` live here so marloth/margen images stay lean. The container mounts sibling **`margen`** at `/workspaces/margen`. For Windows natives, prefer Marloth’s **`marloth-win`** service via `./scripts/devcontainer.sh windows-build` from the attached **`marloth`** session (compose-network HTTP agent → cargo-xwin / clang-cl / `windows-msvc`).
 
 ```bash
 git submodule update --init --recursive   # also runs as postCreateCommand
 ./scripts/build.sh                        # Linux .so
-TARGET=windows ./scripts/build.sh         # Windows .dll (needs MinGW toolchain)
+TARGET=windows ./scripts/build.sh         # Windows .dll (needs cargo-xwin + xwin CRT/SDK)
 ./scripts/install-to-marloth.sh           # optional: copy natives into marloth addons/
 ```
 
