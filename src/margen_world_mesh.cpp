@@ -31,19 +31,25 @@ Color slot_color(int slot_index) {
 	return palette[slot_index % 4];
 }
 
-// Margen uses Z-up (Unreal-style); Godot uses Y-up.
+// Margen is right-handed Z-up (+Y north); Godot is right-handed Y-up.
+// Position map (det +1): (x, y, z) -> (x, z, -y). See margen docs/coordinates.md.
 Vector3 margen_to_godot(const MargenVec3 &v) {
-	return Vector3(v.x, v.z, v.y);
+	return Vector3(v.x, v.z, -v.y);
+}
+
+// Godot cell_size (sx, sy_up, sz) -> margen (sx, sz, sy_up).
+Vector3 cell_size_to_margen(const Vector3 &godot_cell_size) {
+	return Vector3(godot_cell_size.x, godot_cell_size.z, godot_cell_size.y);
 }
 
 Vector3 margen_point_to_godot(
 		const MargenVec3 &center,
 		const MargenVec3 &point,
-		const Vector3 &half_size) {
+		const Vector3 &half_size_margen) {
 	const MargenVec3 world{
-		center.x + point.x * half_size.x,
-		center.y + point.y * half_size.y,
-		center.z + point.z * half_size.z,
+		center.x + point.x * half_size_margen.x,
+		center.y + point.y * half_size_margen.y,
+		center.z + point.z * half_size_margen.z,
 	};
 	return margen_to_godot(world);
 }
@@ -180,7 +186,8 @@ void MargenWorldMesh::generate() {
 	Ref<ArrayMesh> mesh;
 	mesh.instantiate();
 
-	const Vector3 half_size = cell_size * 0.5f;
+	const Vector3 margen_cell_size = cell_size_to_margen(cell_size);
+	const Vector3 half_size = margen_cell_size * 0.5f;
 
 	for (size_t material_index = 0; material_index < material_count; ++material_index) {
 		MargenMaterialSlot slot{};
@@ -212,9 +219,9 @@ void MargenWorldMesh::generate() {
 						face.location_x,
 						face.location_y,
 						face.location_z,
-						cell_size.x,
-						cell_size.y,
-						cell_size.z,
+						margen_cell_size.x,
+						margen_cell_size.y,
+						margen_cell_size.z,
 						&center) != MARGEN_OK) {
 				continue;
 			}
