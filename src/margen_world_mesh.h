@@ -3,11 +3,14 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/node3d.hpp>
+#include <godot_cpp/classes/timer.hpp>
 
 namespace godot {
 
 class MargenWorldMesh : public Node3D {
 	GDCLASS(MargenWorldMesh, Node3D);
+
+	static constexpr double REGEN_DEBOUNCE_SEC = 0.3;
 
 	int seed = 7;
 	int max_blocks = 20;
@@ -16,9 +19,15 @@ class MargenWorldMesh : public Node3D {
 
 	NodePath mesh_instance_path;
 	MeshInstance3D *mesh_instance = nullptr;
+	Timer *regen_timer = nullptr;
+
+	void ensure_regen_timer();
+	void schedule_regenerate();
+	void _on_regen_debounce_timeout();
 
 protected:
 	static void _bind_methods();
+	void _notification(int p_what);
 
 public:
 	MargenWorldMesh();

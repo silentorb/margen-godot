@@ -8,27 +8,52 @@ endif()
 
 set(MARGEN_ROOT "${CMAKE_SOURCE_DIR}/../margen" CACHE PATH "Path to margen repo root")
 set(MARGEN_FFI_PROFILE "release" CACHE STRING "margen_ffi cargo profile (debug/release)")
-set(MARGEN_FFI_TARGET "" CACHE STRING "Optional cargo target triple (e.g. x86_64-pc-windows-gnu)")
+set(MARGEN_FFI_TARGET "" CACHE STRING "Optional cargo target triple (e.g. x86_64-pc-windows-msvc)")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 	set(MARGEN_FFI_PROFILE "debug")
 endif()
 
-if(MARGEN_FFI_TARGET STREQUAL "")
-	set(MARGEN_FFI_DIR "${MARGEN_ROOT}/target/${MARGEN_FFI_PROFILE}")
-else()
-	set(MARGEN_FFI_DIR "${MARGEN_ROOT}/target/${MARGEN_FFI_TARGET}/${MARGEN_FFI_PROFILE}")
+# Honor CARGO_TARGET_DIR when set (marloth-win isolates from bind-mounted margen/target).
+set(_MARGEN_CARGO_TARGET_ROOT "${MARGEN_ROOT}/target")
+if(DEFINED ENV{CARGO_TARGET_DIR} AND NOT "$ENV{CARGO_TARGET_DIR}" STREQUAL "")
+	set(_MARGEN_CARGO_TARGET_ROOT "$ENV{CARGO_TARGET_DIR}")
 endif()
 
+if(MARGEN_FFI_TARGET STREQUAL "")
+	set(MARGEN_FFI_DIR "${_MARGEN_CARGO_TARGET_ROOT}/${MARGEN_FFI_PROFILE}")
+else()
+	set(MARGEN_FFI_DIR "${_MARGEN_CARGO_TARGET_ROOT}/${MARGEN_FFI_TARGET}/${MARGEN_FFI_PROFILE}")
+endif()
+
+# Linux: libmargen_ffi.so / libmargen_ffi.a. MSVC: margen_ffi.dll.lib (prefer) or margen_ffi.lib.
+# Drop cached find result so a changed CARGO_TARGET_DIR is picked up on reconfigure.
+unset(MARGEN_FFI_LIB CACHE)
 find_library(
 	MARGEN_FFI_LIB
-	NAMES margen_ffi
+	NAMES margen_ffi.dll margen_ffi
 	PATHS "${MARGEN_FFI_DIR}"
 	REQUIRED
 	NO_DEFAULT_PATH
 	NO_CMAKE_FIND_ROOT_PATH
 )
 message(STATUS "Using margen_ffi from ${MARGEN_FFI_LIB}")
+
+# Stamp the godot-cpp extension_api.json header version into the binary for diagnostics.
+set(_MARGEN_API_JSON "${CMAKE_SOURCE_DIR}/godot-cpp/gdextension/extension_api.json")
+set(MARGEN_GODOT_API_VERSION "unknown")
+if(EXISTS "${_MARGEN_API_JSON}")
+	file(STRINGS "${_MARGEN_API_JSON}" _api_major REGEX "\"version_major\"")
+	file(STRINGS "${_MARGEN_API_JSON}" _api_minor REGEX "\"version_minor\"")
+	file(STRINGS "${_MARGEN_API_JSON}" _api_patch REGEX "\"version_patch\"")
+	string(REGEX REPLACE ".*: *([0-9]+).*" "\\1" _api_major_n "${_api_major}")
+	string(REGEX REPLACE ".*: *([0-9]+).*" "\\1" _api_minor_n "${_api_minor}")
+	string(REGEX REPLACE ".*: *([0-9]+).*" "\\1" _api_patch_n "${_api_patch}")
+	if(_api_major_n AND _api_minor_n AND NOT _api_patch_n STREQUAL "")
+		set(MARGEN_GODOT_API_VERSION "${_api_major_n}.${_api_minor_n}.${_api_patch_n}")
+	endif()
+endif()
+message(STATUS "margen_godot API version stamp: ${MARGEN_GODOT_API_VERSION}")
 
 set(GODOT_CPP_SYSTEM_HEADERS ON CACHE BOOL "" FORCE)
 add_subdirectory(godot-cpp)
@@ -38,6 +63,10 @@ set(TARGET_NAME "margen_godot")
 add_library(${TARGET_NAME} SHARED
 	src/register_types.cpp
 	src/margen_world_mesh.cpp
+)
+
+target_compile_definitions(${TARGET_NAME} PRIVATE
+	"MARGEN_GODOT_API_VERSION=\"${MARGEN_GODOT_API_VERSION}\""
 )
 
 target_include_directories(${TARGET_NAME} PRIVATE

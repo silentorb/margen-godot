@@ -6,6 +6,7 @@
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
@@ -89,8 +90,46 @@ void MargenWorldMesh::_bind_methods() {
 
 MargenWorldMesh::MargenWorldMesh() = default;
 
+void MargenWorldMesh::ensure_regen_timer() {
+	if (regen_timer != nullptr) {
+		return;
+	}
+	regen_timer = memnew(Timer);
+	regen_timer->set_name("RegenDebounceTimer");
+	regen_timer->set_one_shot(true);
+	regen_timer->set_wait_time(REGEN_DEBOUNCE_SEC);
+	regen_timer->set_process_mode(PROCESS_MODE_ALWAYS);
+	add_child(regen_timer, false, INTERNAL_MODE_FRONT);
+	regen_timer->connect("timeout", callable_mp(this, &MargenWorldMesh::_on_regen_debounce_timeout));
+}
+
+void MargenWorldMesh::schedule_regenerate() {
+	if (!is_node_ready()) {
+		return;
+	}
+	ensure_regen_timer();
+	regen_timer->start(REGEN_DEBOUNCE_SEC);
+}
+
+void MargenWorldMesh::_on_regen_debounce_timeout() {
+	if (!is_inside_tree()) {
+		return;
+	}
+	generate();
+}
+
+void MargenWorldMesh::_notification(int p_what) {
+	if (p_what == NOTIFICATION_EXIT_TREE && regen_timer != nullptr) {
+		regen_timer->stop();
+	}
+}
+
 void MargenWorldMesh::set_seed(int p_seed) {
+	if (seed == p_seed) {
+		return;
+	}
 	seed = p_seed;
+	schedule_regenerate();
 }
 
 int MargenWorldMesh::get_seed() const {
@@ -98,7 +137,12 @@ int MargenWorldMesh::get_seed() const {
 }
 
 void MargenWorldMesh::set_max_blocks(int p_max_blocks) {
-	max_blocks = p_max_blocks;
+	const int clamped = p_max_blocks < 1 ? 1 : p_max_blocks;
+	if (max_blocks == clamped) {
+		return;
+	}
+	max_blocks = clamped;
+	schedule_regenerate();
 }
 
 int MargenWorldMesh::get_max_blocks() const {
@@ -106,7 +150,11 @@ int MargenWorldMesh::get_max_blocks() const {
 }
 
 void MargenWorldMesh::set_cell_size(const Vector3 &p_cell_size) {
+	if (cell_size == p_cell_size) {
+		return;
+	}
 	cell_size = p_cell_size;
+	schedule_regenerate();
 }
 
 Vector3 MargenWorldMesh::get_cell_size() const {
@@ -238,8 +286,12 @@ void MargenWorldMesh::generate() {
 				continue;
 			}
 
-			const Vector3 normal = (face_vertices[1] - face_vertices[0])
-					.cross(face_vertices[2] - face_vertices[0])
+			// Godot ArrayMesh front faces are clockwise when viewed from the front
+			// (default CULL_BACK). Margen face IR is RH-outward (CCW from outside).
+			// Reverse fan order and derive the normal from that order so exterior
+			// faces are front-facing. See margen docs/coordinates.md.
+			const Vector3 normal = (face_vertices[2] - face_vertices[0])
+					.cross(face_vertices[1] - face_vertices[0])
 					.normalized();
 
 			for (size_t point_index = 0; point_index < face_vertices.size(); ++point_index) {
@@ -257,8 +309,8 @@ void MargenWorldMesh::generate() {
 
 			for (size_t tri = 1; tri + 1 < face_vertices.size(); ++tri) {
 				indices.push_back(vertex_offset);
-				indices.push_back(vertex_offset + static_cast<int>(tri));
 				indices.push_back(vertex_offset + static_cast<int>(tri) + 1);
+				indices.push_back(vertex_offset + static_cast<int>(tri));
 			}
 
 			vertex_offset += static_cast<int>(face_vertices.size());

@@ -12,6 +12,8 @@ Generation algorithms stay in **margen** (Rust). This repository:
 
 Minimal mesh path: `MargenWorldMesh` calls `margen_generate_world_faces` and builds an `ArrayMesh`.
 
+Face points from the ABI keep margen’s RH-outward (CCW) order; `MargenWorldMesh` reverses triangle fans for Godot’s clockwise front faces (see margen `docs/coordinates.md`).
+
 ## Dev container
 
 This repo’s [`.devcontainer/`](.devcontainer/) image holds the **focused** third-party stack other Marloth/margen containers omit:
@@ -49,6 +51,23 @@ Environment overrides:
 - `MARGEN_ROOT` — path to margen repo (default: sibling `../margen`)
 - `BUILD_TYPE` — `Debug` or `Release`
 
+## Build (Windows natives)
+
+Cross-compile via Marloth’s **`marloth-win`** image (cargo-xwin + clang-cl + pre-cached xwin CRT/SDK). From the attached Marloth session:
+
+```bash
+# Prefer: triggers marloth-win HTTP agent on the compose network
+./scripts/devcontainer.sh windows-build
+```
+
+Or inside `marloth-win` / with the toolchain on PATH:
+
+```bash
+TARGET=windows ./scripts/build.sh
+```
+
+Requires `XWIN_CACHE_DIR` (default `/opt/cargo-xwin`) from the **marloth-win** image — do not download the CRT/SDK at build time. Rebuild `marloth-win` if the cache is missing.
+
 ## Install into Marloth
 
 After building:
@@ -57,7 +76,7 @@ After building:
 ./scripts/install-to-marloth.sh
 ```
 
-This copies the `.gdextension` file and built library into marloth’s `addons/margen/`.
+This copies built libraries into marloth’s `addons/margen/bin/` (the checked-in `.gdextension` already has Marloth-relative paths).
 
 ## Layout
 
@@ -67,6 +86,11 @@ This copies the `.gdextension` file and built library into marloth’s `addons/m
 | `godot-cpp/` | git submodule (branch 4.5) |
 | `margen_godot.gdextension` | Godot registration |
 | `bin/` | built shared libraries (local) |
-| `scripts/` | build + install helpers |
+| `scripts/` | build + install + `verify-godot-cpp-api.sh` |
+
+### Diagnostics
+
+- Init logs to stderr / Godot warnings: `margen_godot: library_init entered`, `library_init returned`, `initialized (MargenWorldMesh registered, api=...)`.
+- API alignment audit (no Godot required): `./scripts/verify-godot-cpp-api.sh 4.6.1`
 
 See [AGENTS.md](AGENTS.md).
