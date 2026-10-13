@@ -129,6 +129,7 @@ void apply_actor_placements(
 
 		Node3D *spawn = memnew(Node3D);
 		spawn->set_name("PlayerSpawnLocation");
+		spawn->add_to_group("player_spawn");
 		spawn->set_position(margen_to_godot(center) + Vector3(0.0f, spawn_lift_godot_y, 0.0f));
 		actors->add_child(spawn);
 		if (owner->is_inside_tree()) {
