@@ -4,6 +4,7 @@
 
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
+#include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
@@ -63,6 +64,77 @@ MeshInstance3D *resolve_mesh_instance(Node3D *owner, const NodePath &path, MeshI
 		return Object::cast_to<MeshInstance3D>(owner->get_node_or_null("MeshInstance3D"));
 	}
 	return Object::cast_to<MeshInstance3D>(owner->get_node_or_null(path));
+}
+
+Node3D *ensure_actors_root(Node3D *owner) {
+	if (Node3D *existing = Object::cast_to<Node3D>(owner->get_node_or_null("Actors"))) {
+		return existing;
+	}
+	Node3D *actors = memnew(Node3D);
+	actors->set_name("Actors");
+	owner->add_child(actors);
+	if (owner->is_inside_tree()) {
+		actors->set_owner(owner->get_owner());
+	}
+	return actors;
+}
+
+void clear_actors(Node3D *owner) {
+	Node3D *actors = Object::cast_to<Node3D>(owner->get_node_or_null("Actors"));
+	if (actors == nullptr) {
+		return;
+	}
+	while (actors->get_child_count() > 0) {
+		Node *child = actors->get_child(0);
+		actors->remove_child(child);
+		child->queue_free();
+	}
+}
+
+void apply_actor_placements(
+		Node3D *owner,
+		const Vector3 &godot_cell_size,
+		const MargenActorPlacement *placements,
+		size_t placement_count) {
+	clear_actors(owner);
+	if (placements == nullptr || placement_count == 0) {
+		return;
+	}
+
+	Node3D *actors = ensure_actors_root(owner);
+	const Vector3 margen_cell_size = cell_size_to_margen(godot_cell_size);
+	const uint32_t player_spawn_id = margen_placeable_player_spawn();
+	// Small lift above the cell center so the marker sits clearly above the floor plane.
+	constexpr float spawn_lift_godot_y = 0.1f;
+
+	for (size_t i = 0; i < placement_count; ++i) {
+		const MargenActorPlacement &placement = placements[i];
+		if (placement.placeable_id != player_spawn_id) {
+			continue;
+		}
+
+		MargenVec3 center{};
+		if (margen_resolve_cell_center(
+					placement.location_x,
+					placement.location_y,
+					placement.location_z,
+					margen_cell_size.x,
+					margen_cell_size.y,
+					margen_cell_size.z,
+					&center) != MARGEN_OK) {
+			UtilityFunctions::push_warning(
+					"MargenWorldMesh: failed to resolve player spawn cell center");
+			continue;
+		}
+
+		Node3D *spawn = memnew(Node3D);
+		spawn->set_name("PlayerSpawnLocation");
+		spawn->set_position(margen_to_godot(center) + Vector3(0.0f, spawn_lift_godot_y, 0.0f));
+		actors->add_child(spawn);
+		if (owner->is_inside_tree()) {
+			spawn->set_owner(owner->get_owner());
+		}
+	}
 }
 
 } // namespace
@@ -335,6 +407,22 @@ void MargenWorldMesh::generate() {
 		mesh->surface_set_material(mesh->get_surface_count() - 1, material);
 	}
 
+	const MargenActorPlacement *placements = nullptr;
+	size_t placement_count = 0;
+	if (margen_world_faces_placements_bulk(handle, &placements, &placement_count) != MARGEN_OK) {
+		UtilityFunctions::push_warning(
+				"MargenWorldMesh: margen_world_faces_placements_bulk failed: ",
+				margen_last_error() != nullptr ? String(margen_last_error()) : String("unknown"));
+		placements = nullptr;
+		placement_count = 0;
+	}
+
+	// Copy placements before freeing the world handle (pointers are handle-owned).
+	std::vector<MargenActorPlacement> placement_copy;
+	if (placements != nullptr && placement_count > 0) {
+		placement_copy.assign(placements, placements + placement_count);
+	}
+
 	margen_world_faces_free(handle);
 
 	MeshInstance3D *instance = resolve_mesh_instance(this, mesh_instance_path, mesh_instance);
@@ -349,4 +437,10 @@ void MargenWorldMesh::generate() {
 	}
 
 	instance->set_mesh(mesh);
+
+	apply_actor_placements(
+			this,
+			cell_size,
+			placement_copy.empty() ? nullptr : placement_copy.data(),
+			placement_copy.size());
 }
