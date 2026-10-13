@@ -5,12 +5,12 @@ Godot **GDExtension** that integrates the [margen](../margen) world-generation l
 Generation algorithms stay in **margen** (Rust). This repository:
 
 - Loads/links `margen-ffi` (`include/margen.h`)
-- Converts margen face datasets into Godot meshes and placeholder materials
+- Converts margen face datasets into Godot meshes, static trimesh collision, and placeholder materials
 - Exposes `MargenWorldMesh` to GDScript / C# games (e.g. Marloth)
 
 ## Status
 
-Minimal mesh path: `MargenWorldMesh` calls `margen_generate_world_faces` and builds an `ArrayMesh`.
+Minimal mesh path: `MargenWorldMesh` calls `margen_generate_world_faces`, builds an `ArrayMesh`, realizes `WorldCollision` (`StaticBody3D` + trimesh), then applies actor placements.
 
 Face points from the ABI keep margen’s RH-outward (CCW) order; `MargenWorldMesh` reverses triangle fans for Godot’s clockwise front faces (see margen `docs/coordinates.md`).
 

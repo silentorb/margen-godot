@@ -9,7 +9,7 @@
 
 ## Current status
 
-`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot, using **`margen_world_faces_bulk`** (contiguous points/uvs) rather than per-point FFI getters. Linux and Windows (clang-cl / cargo-xwin MSVC cross from Linux) debug/release builds are supported.
+`MargenWorldMesh` converts `margen_generate_world_faces` output into an `ArrayMesh` with placeholder `StandardMaterial3D` per used slot, then realizes static trimesh collision (`WorldCollision`) and actor placements, using **`margen_world_faces_bulk`** (contiguous points/uvs) rather than per-point FFI getters. Linux and Windows (clang-cl / cargo-xwin MSVC cross from Linux) debug/release builds are supported.
 
 Diagnostics: stderr/Godot warnings on library init (`margen_godot: library_init …`, `initialized … api=…`); API audit via `./scripts/verify-godot-cpp-api.sh`.
 

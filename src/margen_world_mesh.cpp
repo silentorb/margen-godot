@@ -3,9 +3,13 @@
 #include <margen.h>
 
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/collision_shape3d.hpp>
+#include <godot_cpp/classes/concave_polygon_shape3d.hpp>
+#include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
+#include <godot_cpp/classes/static_body3d.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/variant/color.hpp>
@@ -89,6 +93,56 @@ void clear_actors(Node3D *owner) {
 		actors->remove_child(child);
 		child->queue_free();
 	}
+}
+
+void clear_world_collision(Node3D *owner) {
+	StaticBody3D *body = Object::cast_to<StaticBody3D>(owner->get_node_or_null("WorldCollision"));
+	if (body == nullptr) {
+		return;
+	}
+	owner->remove_child(body);
+	body->queue_free();
+}
+
+void apply_world_collision(Node3D *owner, MeshInstance3D *instance) {
+	Ref<Mesh> mesh;
+	if (instance != nullptr) {
+		mesh = instance->get_mesh();
+	}
+	if (mesh.is_null()) {
+		clear_world_collision(owner);
+		return;
+	}
+
+	Ref<ConcavePolygonShape3D> trimesh = mesh->create_trimesh_shape();
+	if (trimesh.is_null()) {
+		UtilityFunctions::push_warning("MargenWorldMesh: create_trimesh_shape returned null");
+		clear_world_collision(owner);
+		return;
+	}
+
+	StaticBody3D *body = Object::cast_to<StaticBody3D>(owner->get_node_or_null("WorldCollision"));
+	if (body == nullptr) {
+		body = memnew(StaticBody3D);
+		body->set_name("WorldCollision");
+		owner->add_child(body);
+		if (owner->is_inside_tree()) {
+			body->set_owner(owner->get_owner());
+		}
+	}
+
+	CollisionShape3D *shape_node =
+			Object::cast_to<CollisionShape3D>(body->get_node_or_null("CollisionShape3D"));
+	if (shape_node == nullptr) {
+		shape_node = memnew(CollisionShape3D);
+		shape_node->set_name("CollisionShape3D");
+		body->add_child(shape_node);
+		if (owner->is_inside_tree()) {
+			shape_node->set_owner(owner->get_owner());
+		}
+	}
+
+	shape_node->set_shape(trimesh);
 }
 
 void apply_actor_placements(
@@ -258,10 +312,10 @@ void MargenWorldMesh::_ready() {
 
 void MargenWorldMesh::clear_mesh() {
 	MeshInstance3D *instance = resolve_mesh_instance(this, mesh_instance_path, mesh_instance);
-	if (instance == nullptr) {
-		return;
+	if (instance != nullptr) {
+		instance->set_mesh(Ref<ArrayMesh>());
 	}
-	instance->set_mesh(Ref<ArrayMesh>());
+	clear_world_collision(this);
 }
 
 void MargenWorldMesh::generate() {
@@ -438,6 +492,8 @@ void MargenWorldMesh::generate() {
 	}
 
 	instance->set_mesh(mesh);
+
+	apply_world_collision(this, instance);
 
 	apply_actor_placements(
 			this,
