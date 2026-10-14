@@ -3,26 +3,51 @@
 #include <margen.h>
 
 #include <godot_cpp/classes/array_mesh.hpp>
+#include <godot_cpp/classes/base_material3d.hpp>
 #include <godot_cpp/classes/collision_shape3d.hpp>
 #include <godot_cpp/classes/concave_polygon_shape3d.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/classes/static_body3d.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
 #include <godot_cpp/variant/color.hpp>
+#include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 using namespace godot;
 
 namespace {
+
+struct CellKey {
+	int32_t x = 0;
+	int32_t y = 0;
+	int32_t z = 0;
+
+	bool operator==(const CellKey &other) const {
+		return x == other.x && y == other.y && z == other.z;
+	}
+};
+
+struct CellKeyHash {
+	size_t operator()(const CellKey &key) const {
+		const size_t hx = static_cast<size_t>(static_cast<uint32_t>(key.x));
+		const size_t hy = static_cast<size_t>(static_cast<uint32_t>(key.y));
+		const size_t hz = static_cast<size_t>(static_cast<uint32_t>(key.z));
+		return hx * 73856093u ^ hy * 19349663u ^ hz * 83492791u;
+	}
+};
 
 Color slot_color(int slot_index) {
 	static const Color palette[] = {
@@ -136,6 +161,9 @@ void apply_world_collision(Node3D *owner, MeshInstance3D *instance) {
 	if (shape_node == nullptr) {
 		shape_node = memnew(CollisionShape3D);
 		shape_node->set_name("CollisionShape3D");
+		// Hide the trimesh debug gizmo by default — it coincides with the render mesh and z-fights.
+		// Physics still works; toggle Visible on CollisionShape3D in the editor when inspecting collision.
+		shape_node->set_visible(false);
 		body->add_child(shape_node);
 		if (owner->is_inside_tree()) {
 			shape_node->set_owner(owner->get_owner());
@@ -205,6 +233,8 @@ void MargenWorldMesh::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_cell_size"), &MargenWorldMesh::get_cell_size);
 	ClassDB::bind_method(D_METHOD("set_auto_generate", "auto_generate"), &MargenWorldMesh::set_auto_generate);
 	ClassDB::bind_method(D_METHOD("get_auto_generate"), &MargenWorldMesh::get_auto_generate);
+	ClassDB::bind_method(D_METHOD("set_annotations", "annotations"), &MargenWorldMesh::set_annotations);
+	ClassDB::bind_method(D_METHOD("get_annotations"), &MargenWorldMesh::get_annotations);
 	ClassDB::bind_method(D_METHOD("set_mesh_instance_path", "mesh_instance_path"), &MargenWorldMesh::set_mesh_instance_path);
 	ClassDB::bind_method(D_METHOD("get_mesh_instance_path"), &MargenWorldMesh::get_mesh_instance_path);
 
@@ -212,10 +242,19 @@ void MargenWorldMesh::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "max_blocks"), "set_max_blocks", "get_max_blocks");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "cell_size"), "set_cell_size", "get_cell_size");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "auto_generate"), "set_auto_generate", "get_auto_generate");
+	ADD_PROPERTY(
+			PropertyInfo(Variant::INT, "annotations", PROPERTY_HINT_FLAGS, "Paths,CellBoundaries"),
+			"set_annotations",
+			"get_annotations");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "mesh_instance_path"), "set_mesh_instance_path", "get_mesh_instance_path");
 }
 
 MargenWorldMesh::MargenWorldMesh() = default;
+
+MargenWorldMesh::~MargenWorldMesh() {
+	clear_path_visualization();
+	clear_boundary_visualization();
+}
 
 void MargenWorldMesh::ensure_regen_timer() {
 	if (regen_timer != nullptr) {
@@ -246,8 +285,17 @@ void MargenWorldMesh::_on_regen_debounce_timeout() {
 }
 
 void MargenWorldMesh::_notification(int p_what) {
-	if (p_what == NOTIFICATION_EXIT_TREE && regen_timer != nullptr) {
-		regen_timer->stop();
+	if (p_what == NOTIFICATION_EXIT_TREE) {
+		if (regen_timer != nullptr) {
+			regen_timer->stop();
+		}
+		clear_path_visualization();
+		clear_boundary_visualization();
+	} else if (p_what == NOTIFICATION_ENTER_TREE) {
+		update_annotation_visualizations();
+	} else if (p_what == NOTIFICATION_TRANSFORM_CHANGED) {
+		sync_path_instance_transform();
+		sync_boundary_instance_transform();
 	}
 }
 
@@ -296,6 +344,23 @@ bool MargenWorldMesh::get_auto_generate() const {
 	return auto_generate;
 }
 
+void MargenWorldMesh::set_annotations(int p_annotations) {
+	if (annotations == p_annotations) {
+		return;
+	}
+	annotations = p_annotations;
+	const int needs_cells = ANNOTATION_PATHS | ANNOTATION_CELL_BOUNDARIES;
+	if ((annotations & needs_cells) != 0 && cached_cells.empty() && is_inside_tree()) {
+		generate();
+		return;
+	}
+	update_annotation_visualizations();
+}
+
+int MargenWorldMesh::get_annotations() const {
+	return annotations;
+}
+
 void MargenWorldMesh::set_mesh_instance_path(const NodePath &p_path) {
 	mesh_instance_path = p_path;
 }
@@ -310,12 +375,310 @@ void MargenWorldMesh::_ready() {
 	}
 }
 
+void MargenWorldMesh::clear_path_visualization() {
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		path_mesh_rid = RID();
+		path_instance_rid = RID();
+		return;
+	}
+	if (path_instance_rid.is_valid()) {
+		rs->free_rid(path_instance_rid);
+		path_instance_rid = RID();
+	}
+	if (path_mesh_rid.is_valid()) {
+		rs->free_rid(path_mesh_rid);
+		path_mesh_rid = RID();
+	}
+}
+
+void MargenWorldMesh::sync_path_instance_transform() {
+	if (!path_instance_rid.is_valid()) {
+		return;
+	}
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		return;
+	}
+	rs->instance_set_transform(path_instance_rid, get_global_transform());
+}
+
+void MargenWorldMesh::update_annotation_visualizations() {
+	update_path_visualization();
+	update_boundary_visualization();
+}
+
+void MargenWorldMesh::clear_boundary_visualization() {
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		boundary_mesh_rid = RID();
+		boundary_instance_rid = RID();
+		return;
+	}
+	if (boundary_instance_rid.is_valid()) {
+		rs->free_rid(boundary_instance_rid);
+		boundary_instance_rid = RID();
+	}
+	if (boundary_mesh_rid.is_valid()) {
+		rs->free_rid(boundary_mesh_rid);
+		boundary_mesh_rid = RID();
+	}
+}
+
+void MargenWorldMesh::sync_boundary_instance_transform() {
+	if (!boundary_instance_rid.is_valid()) {
+		return;
+	}
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		return;
+	}
+	rs->instance_set_transform(boundary_instance_rid, get_global_transform());
+}
+
+void MargenWorldMesh::update_boundary_visualization() {
+	clear_boundary_visualization();
+
+	if ((annotations & ANNOTATION_CELL_BOUNDARIES) == 0 || !is_inside_tree()) {
+		return;
+	}
+	if (cached_cells.empty()) {
+		return;
+	}
+
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		return;
+	}
+
+	Ref<World3D> world = get_world_3d();
+	if (world.is_null()) {
+		UtilityFunctions::push_warning("MargenWorldMesh: boundary viz skipped (no World3D)");
+		return;
+	}
+
+	std::unordered_set<CellKey, CellKeyHash> occupancy;
+	occupancy.reserve(cached_cells.size());
+	for (const MargenCell &cell : cached_cells) {
+		occupancy.insert(CellKey{ cell.x, cell.y, cell.z });
+	}
+
+	const Vector3 margen_cell_size = cell_size_to_margen(cell_size);
+	const Color boundary_color(0.15f, 0.35f, 1.0f, 0.9f);
+
+	PackedVector3Array vertices;
+	PackedColorArray colors;
+
+	MargenIVec3 flat_dirs[FLAT_DIRECTION_COUNT]{};
+	for (int direction = 0; direction < FLAT_DIRECTION_COUNT; ++direction) {
+		if (margen_resolve_grid_direction(direction, &flat_dirs[direction]) != MARGEN_OK) {
+			UtilityFunctions::push_warning("MargenWorldMesh: grid direction resolve failed");
+			return;
+		}
+	}
+
+	for (const MargenCell &cell : cached_cells) {
+		MargenVec3 corners[MARGEN_HEX_CELL_CORNER_COUNT]{};
+		if (margen_resolve_default_cell_corners(
+					cell.x,
+					cell.y,
+					cell.z,
+					margen_cell_size.x,
+					margen_cell_size.y,
+					margen_cell_size.z,
+					corners) != MARGEN_OK) {
+			continue;
+		}
+
+		const bool has_cell_below =
+				occupancy.find(CellKey{ cell.x, cell.y, cell.z - 1 }) != occupancy.end();
+
+		for (int i = 0; i < FLAT_DIRECTION_COUNT; ++i) {
+			const int next = (i + 1) % FLAT_DIRECTION_COUNT;
+			if (!has_cell_below) {
+				vertices.push_back(margen_to_godot(corners[i]));
+				vertices.push_back(margen_to_godot(corners[next]));
+				colors.push_back(boundary_color);
+				colors.push_back(boundary_color);
+			}
+
+			const CellKey neighbor_a{
+				cell.x + flat_dirs[i].x,
+				cell.y + flat_dirs[i].y,
+				cell.z + flat_dirs[i].z,
+			};
+			const CellKey neighbor_b{
+				cell.x + flat_dirs[next].x,
+				cell.y + flat_dirs[next].y,
+				cell.z + flat_dirs[next].z,
+			};
+			if (occupancy.find(neighbor_a) == occupancy.end()
+					&& occupancy.find(neighbor_b) == occupancy.end()) {
+				vertices.push_back(margen_to_godot(corners[i]));
+				vertices.push_back(margen_to_godot(corners[i + 6]));
+				colors.push_back(boundary_color);
+				colors.push_back(boundary_color);
+			}
+		}
+	}
+
+	if (vertices.is_empty()) {
+		return;
+	}
+
+	if (boundary_material.is_null()) {
+		boundary_material.instantiate();
+		boundary_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+		boundary_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+		boundary_material->set_flag(BaseMaterial3D::FLAG_SRGB_VERTEX_COLOR, true);
+		boundary_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+		boundary_material->set_flag(BaseMaterial3D::FLAG_DISABLE_FOG, true);
+		boundary_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
+		boundary_material->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+		boundary_material->set_render_priority(126);
+	}
+
+	Array arrays;
+	arrays.resize(Mesh::ARRAY_MAX);
+	arrays[Mesh::ARRAY_VERTEX] = vertices;
+	arrays[Mesh::ARRAY_COLOR] = colors;
+
+	boundary_mesh_rid = rs->mesh_create();
+	rs->mesh_add_surface_from_arrays(boundary_mesh_rid, RenderingServer::PRIMITIVE_LINES, arrays);
+	rs->mesh_surface_set_material(boundary_mesh_rid, 0, boundary_material->get_rid());
+
+	boundary_instance_rid = rs->instance_create();
+	rs->instance_set_base(boundary_instance_rid, boundary_mesh_rid);
+	rs->instance_set_scenario(boundary_instance_rid, world->get_scenario());
+	rs->instance_set_transform(boundary_instance_rid, get_global_transform());
+	rs->instance_set_visible(boundary_instance_rid, true);
+
+	set_notify_transform(true);
+}
+
+void MargenWorldMesh::update_path_visualization() {
+	clear_path_visualization();
+
+	if ((annotations & ANNOTATION_PATHS) == 0 || !is_inside_tree()) {
+		return;
+	}
+	if (cached_cells.empty()) {
+		return;
+	}
+
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs == nullptr) {
+		return;
+	}
+
+	Ref<World3D> world = get_world_3d();
+	if (world.is_null()) {
+		UtilityFunctions::push_warning("MargenWorldMesh: path viz skipped (no World3D)");
+		return;
+	}
+
+	const Vector3 margen_cell_size = cell_size_to_margen(cell_size);
+	const Vector3 half_spoke = margen_cell_size * 0.45f;
+	// Lift spokes above the floor plane so they read clearly (UE used a small Z bump + foreground draw).
+	const Vector3 height_offset_scaled(0.0f, 0.0f, 0.25f * margen_cell_size.z);
+
+	// Near-opaque: thin PRIMITIVE_LINES are easy to miss at 50% alpha.
+	const Color flat_color(0.15f, 0.95f, 0.2f, 0.95f);
+	const Color slope_color(0.1f, 0.9f, 0.85f, 0.95f);
+
+	PackedVector3Array vertices;
+	PackedColorArray colors;
+
+	for (const MargenCell &cell : cached_cells) {
+		if (cell.paths == 0) {
+			continue;
+		}
+
+		MargenVec3 center{};
+		if (margen_resolve_cell_center(
+					cell.x,
+					cell.y,
+					cell.z,
+					margen_cell_size.x,
+					margen_cell_size.y,
+					margen_cell_size.z,
+					&center) != MARGEN_OK) {
+			continue;
+		}
+
+		center.x += height_offset_scaled.x;
+		center.y += height_offset_scaled.y;
+		center.z += height_offset_scaled.z;
+
+		for (int direction = 0; direction < HORIZONTAL_DIRECTION_COUNT; ++direction) {
+			if ((cell.paths & (1u << direction)) == 0) {
+				continue;
+			}
+
+			MargenVec3 dir{};
+			if (margen_resolve_direction_vector(direction, &dir) != MARGEN_OK) {
+				continue;
+			}
+
+			const MargenVec3 end{
+				center.x + dir.x * half_spoke.x,
+				center.y + dir.y * half_spoke.y,
+				center.z + dir.z * half_spoke.z,
+			};
+
+			const Color color = direction < 6 ? flat_color : slope_color;
+			vertices.push_back(margen_to_godot(center));
+			vertices.push_back(margen_to_godot(end));
+			colors.push_back(color);
+			colors.push_back(color);
+		}
+	}
+
+	if (vertices.is_empty()) {
+		UtilityFunctions::push_warning("MargenWorldMesh: path viz enabled but no path bits in grid");
+		return;
+	}
+
+	if (path_material.is_null()) {
+		path_material.instantiate();
+		path_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+		path_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+		path_material->set_flag(BaseMaterial3D::FLAG_SRGB_VERTEX_COLOR, true);
+		path_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+		path_material->set_flag(BaseMaterial3D::FLAG_DISABLE_FOG, true);
+		// Match Unreal foreground debug lines: draw on top of solid world geometry.
+		path_material->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
+		path_material->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+		path_material->set_render_priority(127);
+	}
+
+	Array arrays;
+	arrays.resize(Mesh::ARRAY_MAX);
+	arrays[Mesh::ARRAY_VERTEX] = vertices;
+	arrays[Mesh::ARRAY_COLOR] = colors;
+
+	path_mesh_rid = rs->mesh_create();
+	rs->mesh_add_surface_from_arrays(path_mesh_rid, RenderingServer::PRIMITIVE_LINES, arrays);
+	rs->mesh_surface_set_material(path_mesh_rid, 0, path_material->get_rid());
+
+	path_instance_rid = rs->instance_create();
+	rs->instance_set_base(path_instance_rid, path_mesh_rid);
+	rs->instance_set_scenario(path_instance_rid, world->get_scenario());
+	rs->instance_set_transform(path_instance_rid, get_global_transform());
+	rs->instance_set_visible(path_instance_rid, true);
+
+	set_notify_transform(true);
+}
+
 void MargenWorldMesh::clear_mesh() {
 	MeshInstance3D *instance = resolve_mesh_instance(this, mesh_instance_path, mesh_instance);
 	if (instance != nullptr) {
 		instance->set_mesh(Ref<ArrayMesh>());
 	}
 	clear_world_collision(this);
+	cached_cells.clear();
+	clear_path_visualization();
+	clear_boundary_visualization();
 }
 
 void MargenWorldMesh::generate() {
@@ -472,10 +835,24 @@ void MargenWorldMesh::generate() {
 		placement_count = 0;
 	}
 
-	// Copy placements before freeing the world handle (pointers are handle-owned).
+	// Copy placements and cells before freeing the world handle (pointers are handle-owned).
 	std::vector<MargenActorPlacement> placement_copy;
 	if (placements != nullptr && placement_count > 0) {
 		placement_copy.assign(placements, placements + placement_count);
+	}
+
+	const MargenCell *cells = nullptr;
+	size_t cell_count = 0;
+	if (margen_world_faces_cells_bulk(handle, &cells, &cell_count) != MARGEN_OK) {
+		UtilityFunctions::push_warning(
+				"MargenWorldMesh: margen_world_faces_cells_bulk failed: ",
+				margen_last_error() != nullptr ? String(margen_last_error()) : String("unknown"));
+		cells = nullptr;
+		cell_count = 0;
+	}
+	cached_cells.clear();
+	if (cells != nullptr && cell_count > 0) {
+		cached_cells.assign(cells, cells + cell_count);
 	}
 
 	margen_world_faces_free(handle);
@@ -500,4 +877,6 @@ void MargenWorldMesh::generate() {
 			cell_size,
 			placement_copy.empty() ? nullptr : placement_copy.data(),
 			placement_copy.size());
+
+	update_annotation_visualizations();
 }
